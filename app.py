@@ -1,141 +1,67 @@
 import streamlit as st
-import requests
 
-st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
-st.title("🔐 Cyber Risk Quantification Model (CRQM) - Input Wizard")
+st.set_page_config(page_title="CRQM Asset Classification", layout="wide")
+st.title("🔐 CRQM – Sensitivity-Based Asset Classification")
 
-# ---------- CLEARBIT CONFIG ----------
-CLEARBIT_API_KEY = "sk_live_YOUR_API_KEY_HERE"
+# --- STEP 1: Number of Classification Levels ---
+st.header("📊 Set Classification Levels")
+num_levels = st.selectbox("Select number of data sensitivity levels", [3, 4, 5, 6, 7], index=2)
+classification_labels = [f"Level {i+1}" for i in range(num_levels)]
 
-# ---------- COMPANY NAME NORMALIZATION ----------
-def normalize_company_name(input_name):
-    query = input_name.lower().strip()
-    url = f"https://autocomplete.clearbit.com/v1/companies/suggest?query={query}"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        if data:
-            return data[0]['name'], data[0]['domain']
-        else:
-            return input_name.title(), None
-    except:
-        return input_name.title(), None
+# --- STEP 2: Raw Asset Inputs ---
+st.header("📦 Asset Inventory")
+col1, col2, col3 = st.columns(3)
+with col1:
+    pii = st.number_input("📁 PII Records (millions)", min_value=0.0, step=0.1, value=1.0)
+    phi = st.number_input("📁 PHI Records (millions)", min_value=0.0, step=0.1, value=0.0)
+    pci = st.number_input("📁 PCI Records (millions)", min_value=0.0, step=0.1, value=0.0)
+with col2:
+    ip_assets = st.number_input("💡 IP Assets (count)", min_value=0, step=1, value=100)
+with col3:
+    ot_assets = st.number_input("⚙️ OT Systems (count)", min_value=0, step=1, value=20)
 
-# ---------- CLEARBIT ENRICHMENT ----------
-def get_company_profile(domain):
-    headers = {
-        "Authorization": f"Bearer {CLEARBIT_API_KEY}"
-    }
-    url = f"https://company.clearbit.com/v2/companies/find?domain={domain}"
-    try:
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            revenue = data.get("metrics", {}).get("estimatedAnnualRevenue", None)
-            employees = data.get("metrics", {}).get("employees", None)
-            return revenue, employees
-        else:
-            return None, None
-    except:
-        return None, None
+# --- STEP 3: Classification Distribution ---
+st.header("📌 Sensitivity Classification (%)")
 
-# ---------- INPUTS ----------
-raw_input = st.text_input("🔍 Enter Company Name", value="American Express")
-normalized_name, domain = normalize_company_name(raw_input)
-
-st.write(f"🔍 Interpreted as: **{normalized_name}**")
-if domain:
-    st.write(f"🌐 Company Domain: `{domain}`")
-
-# Auto-fetch revenue and employees if domain is known
-estimated_revenue, estimated_employees = None, None
-if domain:
-    estimated_revenue, estimated_employees = get_company_profile(domain)
-
-# Display + allow manual override
-st.markdown("### 📊 Revenue & Workforce")
-employees = st.number_input("Estimated Number of Employees", min_value=1, value=estimated_employees or 1000)
-revenue = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1,
-                          value=(estimated_revenue / 1_000_000_000) if isinstance(estimated_revenue, (int, float)) else 1.0)
-
-# ---------- DOMAIN SELECTION ----------
-domains_selected = st.multiselect("Select Business Domains", [
-    "Banking", "Insurance", "Retail", "Manufacturing", 
-    "Healthcare", "Telecom", "Technology", "Media", "Oil & Gas"
-], default=["Banking"])
-
-# ---------- DOMAIN BRANCHING ----------
-if "Banking" in domains_selected:
-    st.markdown("💳 **Banking-specific fields**")
-    st.checkbox("✔ Core Banking System in place?")
-    st.checkbox("✔ PCI-DSS Compliant?")
-
-if "Manufacturing" in domains_selected:
-    st.markdown("🏭 **Manufacturing-specific fields**")
-    st.number_input("No. of OT Systems (e.g., PLCs, SCADA)", min_value=0, value=10)
-
-if "Healthcare" in domains_selected:
-    st.markdown("🩺 **Healthcare-specific fields**")
-    st.number_input("PHI Records (in millions)", 0.0, step=0.1)
-
-# ---------- CLASSIFICATION ----------
-st.markdown("### 🗂️ Data Classification")
-
-num_levels = st.selectbox("Select number of sensitivity levels", options=[3, 4, 5, 6, 7], index=2)
-classification_labels = [f"Level {i}" for i in range(1, num_levels + 1)]
-
-st.markdown("#### 🔐 Classification Distribution per Data Type")
-classification_data = {}
-
-for dtype in ["PII", "IP", "OT"]:
-    st.subheader(f"{dtype} Classification")
+def get_classification_distribution(asset_name):
+    st.subheader(f"🔐 {asset_name} Classification Distribution")
+    distribution = {}
     total = 0
-    level_distribution = {}
-    cols = st.columns(num_levels)
-    for i, label in enumerate(classification_labels):
-        with cols[i]:
-            val = st.number_input(f"{label} (%)", min_value=0, max_value=100, step=5, key=f"{dtype}_{label}")
-            level_distribution[label] = val
-            total += val
+    for level in classification_labels:
+        val = st.number_input(f"{asset_name} → {level}", min_value=0, max_value=100, step=5, value=0,
+                              key=f"{asset_name}_{level}")
+        distribution[level] = val
+        total += val
     if total != 100:
-        st.warning(f"⚠️ {dtype} classification must sum to 100%. Current: {total}%")
-    classification_data[dtype] = level_distribution
+        st.warning(f"⚠️ {asset_name} classification must sum to 100% (currently {total}%)")
+    return distribution
 
-# ---------- PRIVACY DATA ----------
-st.markdown("### 🔒 Privacy Data")
-pii = st.number_input("PII Records (in millions)", min_value=0.0, step=0.1)
-phi = st.number_input("PHI Records (in millions)", min_value=0.0, step=0.1)
-pci = st.number_input("PCI Records (in millions)", min_value=0.0, step=0.1)
+pii_dist = get_classification_distribution("PII")
+ip_dist = get_classification_distribution("IP")
+ot_dist = get_classification_distribution("OT")
 
-# ---------- IP ----------
-st.markdown("### 💡 Intellectual Property")
-ip_assets = st.number_input("Number of IP Assets", min_value=0, value=10)
+# --- STEP 4: Auto-calculate actual assets per level ---
+def calc_distribution(base_count, distribution_dict, scale=1):
+    return {level: round((pct / 100) * base_count * scale, 2) for level, pct in distribution_dict.items()}
 
-# ---------- REGION ----------
-region = st.selectbox("Operating Region", ["India", "Europe", "US", "Middle East", "APAC"])
+if st.button("✅ Generate Sensitivity Distribution Report"):
+    st.success("🔍 Distribution Generated Based on Inputs")
 
-# ---------- COMPLIANCE ----------
-st.markdown("### 🛡️ Applicable Compliances")
-compliance_map = {
-    "India": ["DPDA", "RBI Guidelines"],
-    "Europe": ["GDPR"],
-    "US": ["CCPA", "GLBA"],
-    "Middle East": ["PDPL", "NESA"],
-    "APAC": ["PDPA", "APRA CPS"]
-}
-compliances = st.multiselect("Select applicable regulations", options=compliance_map.get(region, []))
+    st.subheader("📋 Asset Count per Classification Level")
+    
+    col1, col2, col3 = st.columns(3)
 
-# ---------- CONFIRM ----------
-if st.button("✅ Confirm Inputs"):
-    st.success("Inputs recorded successfully!")
-    st.json({
-        "Company": normalized_name,
-        "Domain": domains_selected,
-        "Region": region,
-        "Employees": employees,
-        "Revenue (Billion USD)": revenue,
-        "Classification % by Type": classification_data,
-        "Privacy Data": {"PII": pii, "PHI": phi, "PCI": pci},
-        "IP Assets": ip_assets,
-        "Compliances": compliances
-    })
+    with col1:
+        st.markdown("**🔐 PII Records**")
+        pii_counts = calc_distribution(pii, pii_dist, scale=1_000_000)
+        st.json(pii_counts)
+
+    with col2:
+        st.markdown("**💡 IP Assets**")
+        ip_counts = calc_distribution(ip_assets, ip_dist)
+        st.json(ip_counts)
+
+    with col3:
+        st.markdown("**⚙️ OT Systems**")
+        ot_counts = calc_distribution(ot_assets, ot_dist)
+        st.json(ot_counts)
