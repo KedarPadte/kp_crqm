@@ -1,135 +1,126 @@
-import os
 import streamlit as st
 import yfinance as yf
 import google.generativeai as genai
+import os
 
-# === Set Gemini API Key ===
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    st.error("🚨 Gemini API key not found. Please set GEMINI_API_KEY as a secret/environment variable.")
-    st.stop()
+# Set up Streamlit page
+st.set_page_config(page_title="CRQM Company Profiler", layout="wide")
+st.title("CRQM – Company Info")
 
+# Load Gemini API key securely
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-pro")
 
-# === Format revenue nicely ===
-def format_revenue(value):
+# --- Utils ---
+def format_revenue(val):
     try:
-        value = float(value)
-        if value >= 1e12:
-            return f"${value / 1e12:.2f} Trillion"
-        elif value >= 1e9:
-            return f"${value / 1e9:.2f} Billion"
-        elif value >= 1e6:
-            return f"${value / 1e6:.2f} Million"
-        else:
-            return f"${value:,.0f}"
+        val = float(val)
+        if val >= 1e12:
+            return f"${val/1e12:.2f} Trillion"
+        elif val >= 1e9:
+            return f"${val/1e9:.2f} Billion"
+        elif val >= 1e6:
+            return f"${val/1e6:.2f} Million"
+        return f"${val:,.0f}"
     except:
-        return value
+        return val
 
-# === Gemini Ticker Resolver ===
-def get_valid_ticker_from_gemini(company_name):
-    prompt_check_listing = f"""
-    Is the company "{company_name}" publicly listed on any stock exchange?
-    If yes, return ONLY its stock ticker (e.g., RELIANCE.NS or AAPL).
-    If not, just return: NOT_LISTED
-    """
+# --- Gemini Disambiguation ---
+def get_company_options(user_input):
+    prompt = f"""The user typed "{user_input}". Suggest a list of real companies or groups they could mean. 
+Return only a clean, newline-separated list of exact company names. No comments."""
     try:
-        response = model.generate_content(prompt_check_listing)
-        ticker = response.text.strip()
-        if "NOT_LISTED" in ticker.upper():
-            followup_prompt = f"""
-            List all publicly listed subsidiaries or companies under "{company_name}".
-            Return clean numbered list in this format (no comments or notes):
-            1. TICKER - Company Name
-            2. TICKER - Company Name
-            """
-            followup = model.generate_content(followup_prompt)
-            lines = followup.text.strip().split('\n')
-            options = []
-            for line in lines:
-                parts = line.split(' - ')
-                if len(parts) == 2 and '.' in parts[0]:
-                    ticker_candidate = parts[0].split('. ', 1)[-1].strip()
-                    name = parts[1].strip()
-                    if " " not in ticker_candidate:
-                        options.append((ticker_candidate, name))
-            return None, None, options if options else None
-        else:
-            return ticker.strip(), company_name.strip(), None
-    except Exception as e:
-        st.error(f"Gemini error: {e}")
-        return None, None, None
+        response = model.generate_content(prompt)
+        return [line.strip("-•12345. ").strip() for line in response.text.split("\n") if line.strip()]
+    except:
+        return []
 
-# === Yahoo Finance Info Fetch ===
+def get_stock_ticker(company_name):
+    prompt = f"""Return ONLY the correct official stock ticker (with exchange suffix, e.g., SBIN.NS, AAPL, GOOG) for:
+    "{company_name}" 
+Only the ticker. No extra text."""
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip().split()[0]
+    except:
+        return None
+
+def get_subsidiary_tickers(parent_company):
+    prompt = f"""The user searched for "{parent_company}", which is not publicly listed.
+List all **publicly listed subsidiaries** (on any exchange) and their correct stock tickers in format: 
+TICKER - Company Name. Do not include unlisted firms or comments."""
+    try:
+        response = model.generate_content(prompt)
+        return [line.strip() for line in response.text.split("\n") if line.strip() and "-" in line]
+    except:
+        return []
+
+# --- Yahoo Finance Fetch ---
 def fetch_company_info(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         return {
-            "Ticker": ticker,
-            "Name": info.get("longName", "Not found"),
+            "Name": info.get("longName", "N/A"),
             "Revenue": info.get("totalRevenue", None),
             "Employees": info.get("fullTimeEmployees", None),
-            "Industry": info.get("industry", "Not found"),
-            "Sector": info.get("sector", "Not found"),
-            "Region": info.get("country", "Not found")
+            "Industry": info.get("industry", "N/A"),
+            "Sector": info.get("sector", "N/A"),
+            "Region": info.get("country", "N/A")
         }
     except Exception as e:
         return {"Error": str(e)}
 
-# === Streamlit App ===
-st.set_page_config(page_title="CRQM - Company Enrichment", layout="centered")
-st.title("🔐 CRQM - Company Profile Input")
+# --- Streamlit UI Flow ---
+user_input = st.text_input("🔍 Enter company name", placeholder="e.g. SBI, Aditya Birla, Google")
 
-company_input = st.text_input("Enter Company Name", value="Aditya Birla")
+if user_input:
+    options = get_company_options(user_input)
 
-if st.button("🔍 Fetch Company Info"):
-    with st.spinner("Fetching ticker using Gemini..."):
-        ticker, resolved_name, subsidiaries = get_valid_ticker_from_gemini(company_input)
+    if options:
+        company_selected = st.selectbox("Select intended company", options)
+        ticker = get_stock_ticker(company_selected)
 
-    if subsidiaries:
-        choice = st.selectbox("🧭 Select a listed subsidiary", [f"{t} - {n}" for t, n in subsidiaries])
-        ticker = choice.split(" - ")[0]
-        resolved_name = choice.split(" - ")[1]
+        if not ticker or " " in ticker or len(ticker) > 15:
+            st.warning("Company not directly listed. Checking for subsidiaries...")
+            subs = get_subsidiary_tickers(company_selected)
+            if subs:
+                sub_selected = st.selectbox("Select subsidiary", subs)
+                ticker = sub_selected.split(" - ")[0].strip()
+            else:
+                st.error("No subsidiaries found.")
+                st.stop()
 
-    if ticker:
-        st.success(f"✅ Ticker Resolved: `{ticker}`  \n📌 Company: **{resolved_name}**")
+        st.success(f"Finalized Ticker: `{ticker}`")
+        data = fetch_company_info(ticker)
 
-        company_data = fetch_company_info(ticker)
-        if "Error" in company_data:
-            st.error(company_data["Error"])
+        if "Error" in data:
+            st.error(data["Error"])
             st.stop()
 
-        # Manual overrides
-        st.markdown("### 📊 Auto-Fetched (Editable) Company Info")
-        st.text(f"Industry: {company_data.get('Industry')}")
-        st.text(f"Sector: {company_data.get('Sector')}")
-        st.text(f"Region: {company_data.get('Region')}")
+        # Override fields
+        st.markdown("### Company Profile")
 
-        employees = st.number_input(
-            "👥 Estimated Number of Employees",
-            min_value=0,
-            value=company_data.get("Employees") or 1000
-        )
+        st.markdown(f"**Company:** {data['Name']}")
+        st.markdown(f"**Region:** {data['Region']}")
+        st.markdown(f"**Industry:** {data['Industry']}")
+        st.markdown(f"**Sector:** {data['Sector']}")
 
-        revenue = st.number_input(
-            "💰 Estimated Revenue (in Billions USD)",
+        revenue_override = st.number_input(
+            "Estimated Revenue (override if needed)",
             min_value=0.0,
-            value=(company_data.get("Revenue") or 1e9) / 1e9,
-            step=0.1
+            step=0.1,
+            value=(float(data["Revenue"]) / 1e9) if data["Revenue"] else 1.0,
+            help="In USD billions"
         )
 
-        st.success("🎯 Company enrichment complete. Ready for CRQM modeling.")
+        employees_override = st.number_input(
+            "👥 Estimated Employees (override if needed)",
+            min_value=0,
+            value=data["Employees"] if data["Employees"] else 1000,
+        )
 
-        # Store output or display
-        st.markdown("#### 📄 Finalized Inputs")
-        st.write(f"**Ticker:** {ticker}")
-        st.write(f"**Name:** {company_data.get('Name')}")
-        st.write(f"**Employees:** {employees}")
-        st.write(f"**Revenue:** ${revenue:.2f} Billion")
-        st.write(f"**Industry:** {company_data.get('Industry')}")
-        st.write(f"**Sector:** {company_data.get('Sector')}")
-        st.write(f"**Region:** {company_data.get('Region')}")
+        st.success("Data loaded and editable. Ready for CRQM modeling.")
     else:
-        st.error("❌ Could not resolve a valid ticker.")
+        st.error("Could not find company options.")
