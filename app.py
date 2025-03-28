@@ -1,70 +1,80 @@
-
 import streamlit as st
 import requests
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
-st.title(" Cyber Risk Quantification Model (CRQM) - Input Wizard")
+st.title("🔐 Cyber Risk Quantification Model (CRQM) - Input Wizard")
 
-# ---------- CLEARBIT CONFIG ----------
-CLEARBIT_API_KEY = "sk_live_YOUR_API_KEY_HERE"
+# --------- Helper: Scrape CompaniesMarketCap ---------
+def get_company_data_from_marketcap(company_name):
+    search_url = f"https://companiesmarketcap.com/search/?query={company_name.replace(' ', '+')}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-# ---------- COMPANY NAME NORMALIZATION ----------
+    try:
+        search_response = requests.get(search_url, headers=headers)
+        soup = BeautifulSoup(search_response.text, 'html.parser')
+        link_tag = soup.find('a', class_='link-detail')
+
+        if not link_tag:
+            return None, None, None, None, None
+
+        company_url = "https://companiesmarketcap.com" + link_tag['href']
+        company_response = requests.get(company_url, headers=headers)
+        company_soup = BeautifulSoup(company_response.text, 'html.parser')
+
+        # Revenue
+        revenue_div = company_soup.find('div', text=lambda x: x and 'Revenue' in x)
+        revenue = revenue_div.find_next('div').text.strip() if revenue_div else 'N/A'
+
+        # Sector
+        sector_div = company_soup.find('div', text=lambda x: x and 'Sector' in x)
+        sector = sector_div.find_next('div').text.strip() if sector_div else 'N/A'
+
+        # Industry
+        industry_div = company_soup.find('div', text=lambda x: x and 'Industry' in x)
+        industry = industry_div.find_next('div').text.strip() if industry_div else 'N/A'
+
+        # Country
+        country_div = company_soup.find('div', text=lambda x: x and 'Country' in x)
+        country = country_div.find_next('div').text.strip() if country_div else 'N/A'
+
+        return revenue, None, industry, sector, country
+
+    except Exception as e:
+        return None, None, None, None, None
+
+# --------- Normalize Company Name ---------
 def normalize_company_name(input_name):
-    query = input_name.lower().strip()
-    url = f"https://autocomplete.clearbit.com/v1/companies/suggest?query={query}"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        if data:
-            return data[0]['name'], data[0]['domain']
-        else:
-            return input_name.title(), None
-    except:
-        return input_name.title(), None
+    return input_name.strip().title()
 
-# ---------- CLEARBIT ENRICHMENT ----------
-def get_company_profile(domain):
-    headers = {
-        "Authorization": f"Bearer {CLEARBIT_API_KEY}"
-    }
-    url = f"https://company.clearbit.com/v2/companies/find?domain={domain}"
-    try:
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            revenue = data.get("metrics", {}).get("estimatedAnnualRevenue", None)
-            employees = data.get("metrics", {}).get("employees", None)
-            industry = data.get("category", {}).get("industry", "Unknown")
-            sector = data.get("category", {}).get("sector", "Unknown")
-            country = data.get("geo", {}).get("country", "Unknown")
-            return revenue, employees, industry, sector, country
-        else:
-            return None, None, "Unknown", "Unknown", "Unknown"
-    except:
-        return None, None, "Unknown", "Unknown", "Unknown"
-
-# ---------- INPUTS ----------
+# --------- INPUTS ---------
 raw_input = st.text_input("Enter Company Name", value="American Express")
-normalized_name, domain = normalize_company_name(raw_input)
+normalized_name = normalize_company_name(raw_input)
 
 st.write(f"🔍 Interpreted as: **{normalized_name}**")
-if domain:
-    st.markdown(f"**Website:** [https://{domain}](https://{domain})")
 
-# Auto-fetch additional company info
-revenue, employees_auto, industry, sector, region_auto = None, None, "Unknown", "Unknown", "Unknown"
-if domain:
-    revenue, employees_auto, industry, sector, region_auto = get_company_profile(domain)
+# Fetch public info from CompaniesMarketCap
+revenue_str, employees_auto, industry, sector, region_auto = get_company_data_from_marketcap(normalized_name)
 
-# Show retrieved info and allow edits
-st.markdown("### Company Profile")
-st.write(f"**Industry:** {industry}")
-st.write(f"**Sector:** {sector}")
-st.write(f"**Region (auto-detected):** {region_auto}")
+# Revenue formatting
+def parse_revenue(rev_text):
+    try:
+        if "billion" in rev_text.lower():
+            return float(rev_text.replace("$", "").split()[0])
+        elif "million" in rev_text.lower():
+            return float(rev_text.replace("$", "").split()[0]) / 1000
+    except:
+        return 1.0  # default fallback
+
+revenue_billion = parse_revenue(revenue_str or "1.0")
+
+# --------- DISPLAY ---------
+st.markdown("### 📊 Company Profile")
+st.write(f"🏭 **Industry:** {industry or 'Unknown'}")
+st.write(f"📌 **Sector:** {sector or 'Unknown'}")
+st.write(f"🌎 **Region (estimated):** {region_auto or 'Unknown'}")
 
 employees = st.number_input("Estimated Number of Employees", min_value=1, value=employees_auto or 1000)
-revenue_billion = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1,
-                                  value=(revenue / 1_000_000_000) if isinstance(revenue, (int, float)) else 1.0)
+revenue_input = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1, value=revenue_billion)
 
-# Continue from here with the rest of the form as needed
-st.success("Company info fetched and ready for CRQM modeling.")
+st.success("Company info auto-fetched and ready for CRQM modeling.")
