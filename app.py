@@ -2,7 +2,7 @@ import streamlit as st
 
 # ---------- Page Setup ----------
 st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
-st.title("🔐 CRQM – Company Risk Profiling")
+st.title("CRQM")
 
 # ---------- 1. Company Info ----------
 with st.expander("🏢 Company Info", expanded=True):
@@ -27,12 +27,12 @@ company_info = {
 }
 
 # ---------- 2. Sensitivity Level Setup ----------
-st.markdown("### 🧩 Sensitivity Classification Setup")
+st.markdown("### Sensitivity Classification Setup")
 sensitivity_levels = st.slider("Number of Sensitivity Levels", min_value=3, max_value=7, value=5)
 level_labels = [f"Level {i}" for i in range(1, sensitivity_levels + 1)]
 
 # ---------- 3. Asset Inputs ----------
-st.markdown("### 📦 Data Asset Counts")
+st.markdown("### Data Asset Counts")
 col1, col2, col3 = st.columns(3)
 with col1:
     pii_total = st.number_input("PII Records", min_value=0, value=1_000_000)
@@ -51,22 +51,22 @@ def get_distribution(asset_type, total):
             pct = st.number_input(f"{level_labels[i]}", min_value=0, max_value=100, step=5, key=f"{asset_type}_{i}")
             percentages.append(pct)
     if sum(percentages) != 100:
-        st.warning(f"⚠️ {asset_type}: Percentages should sum to 100%.")
+        st.warning(f"⚠{asset_type}: Percentages should sum to 100%.")
     counts = [round((pct / 100) * total) for pct in percentages]
     return dict(zip(level_labels, counts))
 
 # ---------- 4. Classification Distribution ----------
-st.markdown("### 🧮 Classification Breakdown")
+st.markdown("### Classification Breakdown")
 
-with st.expander("🔒 PII Classification"):
+with st.expander("PII Classification"):
     pii_dist = get_distribution("PII", pii_total)
-with st.expander("💡 IP Classification"):
+with st.expander("IP Classification"):
     ip_dist = get_distribution("IP", ip_total)
-with st.expander("⚙️ OT Classification"):
+with st.expander(" OT Classification"):
     ot_dist = get_distribution("OT", ot_total)
 
 # ---------- 5. Final Summary ----------
-if st.button("✅ Generate CRQM Profile"):
+if st.button(" Generate CRQM Profile"):
     summary = {
         "Company Info": company_info,
         "Sensitivity Levels": level_labels,
