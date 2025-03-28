@@ -5,89 +5,115 @@ from bs4 import BeautifulSoup
 st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
 st.title("🔐 Cyber Risk Quantification Model (CRQM) - Input Wizard")
 
-# ----------- Helper: Normalize -----------
-def normalize_company_name(name):
-    return name.strip().title()
 
-# ----------- Helper: Revenue Parser -----------
-def parse_revenue(text):
+# ---------- Helper: Scrape CompaniesMarketCap ----------
+def get_company_data_from_marketcap(company_name):
     try:
-        text = text.lower().replace(",", "")
-        if "billion" in text:
-            return float(text.replace("$", "").split()[0])
-        elif "million" in text:
-            return float(text.replace("$", "").split()[0]) / 1000
-        elif "crore" in text:
-            return float(text.split()[0]) * 0.12  # ₹ Crore to USD Billion approx
-        elif "lakh" in text:
-            return float(text.split()[0]) * 0.0012
-        elif "$" in text:
-            return float(text.replace("$", "").split()[0])
-    except:
-        return None
-
-def parse_employees(text):
-    try:
-        return int(text.replace(",", "").strip())
-    except:
-        return None
-
-# ----------- Fetch from CompaniesMarketCap -----------
-def get_from_marketcap(company):
-    try:
-        search_url = f"https://companiesmarketcap.com/search/?query={company.replace(' ', '+')}"
+        search_url = f"https://companiesmarketcap.com/search/?query={company_name.replace(' ', '+')}"
         headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(search_url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        search_response = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(search_response.text, 'html.parser')
         link_tag = soup.find('a', class_='link-detail')
         if not link_tag:
-            return {}
-        
+            return None
         company_url = "https://companiesmarketcap.com" + link_tag['href']
-        page = requests.get(company_url, headers=headers)
-        soup = BeautifulSoup(page.text, 'html.parser')
+        company_response = requests.get(company_url, headers=headers, timeout=10)
+        company_soup = BeautifulSoup(company_response.text, 'html.parser')
 
-        data = {}
-        rows = soup.find_all("div", class_="company-profile-row")
-        for row in rows:
-            label = row.find("div", class_="company-profile-row-title").text.strip().lower()
-            value = row.find("div", class_="company-profile-row-value").text.strip()
-            if "industry" in label: data["industry"] = value
-            if "sector" in label: data["sector"] = value
-            if "country" in label: data["region"] = value
-            if "revenue" in label: data["revenue"] = value
-            if "employees" in label: data["employees"] = value
-        return data
-    except Exception as e:
-        return {}
+        def extract_field(label):
+            tag = company_soup.find('div', string=lambda x: x and label.lower() in x.lower())
+            return tag.find_next('div').text.strip() if tag else None
 
-# ----------- Streamlit Inputs -----------
+        return {
+            'revenue': extract_field('Revenue'),
+            'industry': extract_field('Industry'),
+            'sector': extract_field('Sector'),
+            'region': extract_field('Country'),
+            'employees': None
+        }
+
+    except Exception:
+        return None
+
+
+# ---------- Helper: Scrape Screener (Indian companies) ----------
+def get_company_data_from_screener(company_name):
+    try:
+        url = f"https://www.screener.in/company/{company_name.upper()}/"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        rev_tag = soup.find('li', string=lambda x: x and 'Revenue' in x)
+        revenue = rev_tag.text.split(":")[-1].strip() if rev_tag else None
+
+        return {
+            'revenue': revenue,
+            'industry': None,
+            'sector': None,
+            'region': 'India',
+            'employees': None
+        }
+    except Exception:
+        return None
+
+
+# ---------- Main Fallback Chain ----------
+def get_fallback_metadata(company_name):
+    data = get_company_data_from_marketcap(company_name)
+    if data and any(data.values()):
+        return data | {'source': 'CompaniesMarketCap'}
+
+    data = get_company_data_from_screener(company_name)
+    if data and any(data.values()):
+        return data | {'source': 'Screener'}
+
+    return {
+        'revenue': '1.0',
+        'industry': 'Finance',
+        'sector': 'Banking',
+        'region': 'India',
+        'employees': '10000',
+        'source': 'Fallback Defaults'
+    }
+
+
+# ---------- Revenue Parser ----------
+def parse_revenue(rev_text):
+    try:
+        rev_text = rev_text.lower().replace('$', '').replace(',', '')
+        if "billion" in rev_text:
+            return float(rev_text.split()[0])
+        elif "million" in rev_text:
+            return float(rev_text.split()[0]) / 1000
+        elif rev_text.replace('.', '', 1).isdigit():
+            return float(rev_text)
+    except:
+        return 1.0
+    return 1.0
+
+
+# ---------- INPUT SECTION ----------
 company_input = st.text_input("Enter Company Name", value="American Express")
-company_name = normalize_company_name(company_input)
+normalized_name = company_input.strip().title()
+st.write(f"🔍 Interpreted as: **{normalized_name}**")
 
-st.markdown(f"🔍 Interpreted as: **{company_name}**")
+# ---------- Metadata Fetch ----------
+metadata = get_fallback_metadata(normalized_name)
 
-# ----------- Fetch from fallback chains -----------
-marketcap_data = get_from_marketcap(company_name)
+industry = metadata.get("industry", "Unknown")
+sector = metadata.get("sector", "Unknown")
+region = metadata.get("region", "Unknown")
+source = metadata.get("source", "None")
+rev_val = parse_revenue(metadata.get("revenue", "1.0"))
+employees = int(metadata.get("employees") or 10000)
 
-# Extract with fallback logic
-industry = marketcap_data.get("industry", "Unknown")
-sector = marketcap_data.get("sector", "Unknown")
-region = marketcap_data.get("region", "Unknown")
-revenue_raw = marketcap_data.get("revenue")
-employees_raw = marketcap_data.get("employees")
-
-# Parse revenue and employees
-revenue_billion = parse_revenue(revenue_raw) if revenue_raw else 1.0
-employee_count = parse_employees(employees_raw) if employees_raw else 10000
-
-# ----------- Display UI -----------
+# ---------- DISPLAY ----------
 st.markdown("### 📊 Company Profile")
-st.write(f"🏭 **Industry:** {industry}")
-st.write(f"📌 **Sector:** {sector}")
-st.write(f"🌎 **Region (estimated):** {region}")
+st.write(f"🏭 **Industry:** {industry or 'Unknown'}")
+st.write(f"📌 **Sector:** {sector or 'Unknown'}")
+st.write(f"🌎 **Region (estimated):** {region or 'Unknown'}")
 
-employees = st.number_input("Estimated Number of Employees", min_value=1, value=employee_count)
-revenue = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1, value=revenue_billion)
+employees_input = st.number_input("Estimated Number of Employees", min_value=1, value=employees)
+revenue_input = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1, value=rev_val)
 
-st.success("✅ Company info auto-fetched (with fallback chain) and ready for CRQM modeling.")
+st.success(f"✅ Company info auto-fetched (via {source}) and ready for CRQM modeling.")
