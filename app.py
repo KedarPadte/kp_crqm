@@ -11,7 +11,7 @@ def get_company_data_from_marketcap(company_name):
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        search_response = requests.get(search_url, headers=headers)
+        search_response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(search_response.text, 'html.parser')
         link_tag = soup.find('a', class_='link-detail')
 
@@ -19,24 +19,37 @@ def get_company_data_from_marketcap(company_name):
             return None, None, None, None, None
 
         company_url = "https://companiesmarketcap.com" + link_tag['href']
-        company_response = requests.get(company_url, headers=headers)
+        company_response = requests.get(company_url, headers=headers, timeout=10)
         company_soup = BeautifulSoup(company_response.text, 'html.parser')
 
-        # Revenue
-        revenue_div = company_soup.find('div', text=lambda x: x and 'Revenue' in x)
-        revenue = revenue_div.find_next('div').text.strip() if revenue_div else 'N/A'
+        # Region/Country
+        country_span = company_soup.find('span', string="Country")
+        country = country_span.find_next('div').text.strip() if country_span else "Unknown"
 
         # Sector
-        sector_div = company_soup.find('div', text=lambda x: x and 'Sector' in x)
-        sector = sector_div.find_next('div').text.strip() if sector_div else 'N/A'
+        category_tags = company_soup.find_all('a', class_='company-category')
+        sector = ", ".join([tag.text.strip() for tag in category_tags]) if category_tags else "Unknown"
 
-        # Industry
-        industry_div = company_soup.find('div', text=lambda x: x and 'Industry' in x)
-        industry = industry_div.find_next('div').text.strip() if industry_div else 'N/A'
+        # Revenue (try to find where "Revenue" is mentioned in tabs or sections)
+        revenue_section = company_soup.find('a', string="Revenue")
+        revenue = "N/A"
+        if revenue_section:
+            parent_section = revenue_section.find_parent('li')
+            if parent_section:
+                revenue_div = parent_section.find_next('div', class_='subsection')
+                if revenue_div:
+                    text = revenue_div.get_text()
+                    for line in text.splitlines():
+                        if "$" in line and ("billion" in line.lower() or "million" in line.lower()):
+                            revenue = line.strip()
+                            break
 
-        # Country
-        country_div = company_soup.find('div', text=lambda x: x and 'Country' in x)
-        country = country_div.find_next('div').text.strip() if country_div else 'N/A'
+        # Sector/Industry from header if available
+        overview = company_soup.find('div', class_='company-description')
+        industry = "Unknown"
+        if overview:
+            if "provider of" in overview.text.lower():
+                industry = overview.text.split("provider of")[-1].split(".")[0].strip().capitalize()
 
         return revenue, None, industry, sector, country
 
@@ -47,13 +60,12 @@ def get_company_data_from_marketcap(company_name):
 def normalize_company_name(input_name):
     return input_name.strip().title()
 
-# --------- INPUTS ---------
+# --------- INPUT ---------
 raw_input = st.text_input("Enter Company Name", value="American Express")
 normalized_name = normalize_company_name(raw_input)
-
 st.write(f"🔍 Interpreted as: **{normalized_name}**")
 
-# Fetch public info from CompaniesMarketCap
+# --------- SCRAPE DATA ---------
 revenue_str, employees_auto, industry, sector, region_auto = get_company_data_from_marketcap(normalized_name)
 
 # Revenue formatting
@@ -64,7 +76,7 @@ def parse_revenue(rev_text):
         elif "million" in rev_text.lower():
             return float(rev_text.replace("$", "").split()[0]) / 1000
     except:
-        return 1.0  # default fallback
+        return 1.0  # fallback
 
 revenue_billion = parse_revenue(revenue_str or "1.0")
 
@@ -77,4 +89,4 @@ st.write(f"🌎 **Region (estimated):** {region_auto or 'Unknown'}")
 employees = st.number_input("Estimated Number of Employees", min_value=1, value=employees_auto or 1000)
 revenue_input = st.number_input("Estimated Revenue (in billions USD)", min_value=0.0, step=0.1, value=revenue_billion)
 
-st.success("Company info auto-fetched and ready for CRQM modeling.")
+st.success("✅ Company info auto-fetched and ready for CRQM modeling.")
