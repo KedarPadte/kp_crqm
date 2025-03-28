@@ -1,106 +1,135 @@
-
+import os
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-import json
-import wikipedia
+import yfinance as yf
+import google.generativeai as genai
 
-# --------------------- CONFIG ---------------------
-st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
-st.title("🔐 Cyber Risk Quantification Model (CRQM) - Input Wizard")
+# === Set Gemini API Key ===
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    st.error("🚨 Gemini API key not found. Please set GEMINI_API_KEY as a secret/environment variable.")
+    st.stop()
 
-# ----------------- Gemini API Setup -----------------
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
-def gemini_enrich_company(company_name):
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    prompt = f"Normalize this company name and give its official name, revenue in billions USD, employee count, domain/sector, industry, and region/country. Return JSON. Company: {company_name}"
-    data = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-pro")
+
+# === Format revenue nicely ===
+def format_revenue(value):
     try:
-        r = requests.post(url, headers=headers, params=params, json=data)
-        response_text = r.json()['candidates'][0]['content']['parts'][0]['text']
-        return json.loads(response_text)
+        value = float(value)
+        if value >= 1e12:
+            return f"${value / 1e12:.2f} Trillion"
+        elif value >= 1e9:
+            return f"${value / 1e9:.2f} Billion"
+        elif value >= 1e6:
+            return f"${value / 1e6:.2f} Million"
+        else:
+            return f"${value:,.0f}"
     except:
-        return {}
+        return value
 
-# ----------------- CompaniesMarketCap Scraper -----------------
-def get_data_from_companiesmarketcap(company_name):
+# === Gemini Ticker Resolver ===
+def get_valid_ticker_from_gemini(company_name):
+    prompt_check_listing = f"""
+    Is the company "{company_name}" publicly listed on any stock exchange?
+    If yes, return ONLY its stock ticker (e.g., RELIANCE.NS or AAPL).
+    If not, just return: NOT_LISTED
+    """
     try:
-        search_url = f"https://companiesmarketcap.com/search/?query={company_name.replace(' ', '+')}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        search_response = requests.get(search_url, headers=headers)
-        soup = BeautifulSoup(search_response.text, 'html.parser')
-        link_tag = soup.find('a', class_='link-detail')
-        if not link_tag:
-            return {}
-        company_url = "https://companiesmarketcap.com" + link_tag['href']
-        company_response = requests.get(company_url, headers=headers)
-        soup = BeautifulSoup(company_response.text, 'html.parser')
-        data = {
-            "revenue": soup.find("div", string=lambda x: x and "Revenue" in x).find_next("div").text.strip() if soup.find("div", string=lambda x: x and "Revenue" in x) else None,
-            "industry": soup.find("div", string=lambda x: x and "Industry" in x).find_next("div").text.strip() if soup.find("div", string=lambda x: x and "Industry" in x) else None,
-            "sector": soup.find("div", string=lambda x: x and "Sector" in x).find_next("div").text.strip() if soup.find("div", string=lambda x: x and "Sector" in x) else None,
-            "region": soup.find("div", string=lambda x: x and "Country" in x).find_next("div").text.strip() if soup.find("div", string=lambda x: x and "Country" in x) else None
+        response = model.generate_content(prompt_check_listing)
+        ticker = response.text.strip()
+        if "NOT_LISTED" in ticker.upper():
+            followup_prompt = f"""
+            List all publicly listed subsidiaries or companies under "{company_name}".
+            Return clean numbered list in this format (no comments or notes):
+            1. TICKER - Company Name
+            2. TICKER - Company Name
+            """
+            followup = model.generate_content(followup_prompt)
+            lines = followup.text.strip().split('\n')
+            options = []
+            for line in lines:
+                parts = line.split(' - ')
+                if len(parts) == 2 and '.' in parts[0]:
+                    ticker_candidate = parts[0].split('. ', 1)[-1].strip()
+                    name = parts[1].strip()
+                    if " " not in ticker_candidate:
+                        options.append((ticker_candidate, name))
+            return None, None, options if options else None
+        else:
+            return ticker.strip(), company_name.strip(), None
+    except Exception as e:
+        st.error(f"Gemini error: {e}")
+        return None, None, None
+
+# === Yahoo Finance Info Fetch ===
+def fetch_company_info(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        return {
+            "Ticker": ticker,
+            "Name": info.get("longName", "Not found"),
+            "Revenue": info.get("totalRevenue", None),
+            "Employees": info.get("fullTimeEmployees", None),
+            "Industry": info.get("industry", "Not found"),
+            "Sector": info.get("sector", "Not found"),
+            "Region": info.get("country", "Not found")
         }
-        return data
-    except:
-        return {}
+    except Exception as e:
+        return {"Error": str(e)}
 
-# ----------------- Wikipedia Fallback -----------------
-def get_data_from_wikipedia(company_name):
-    try:
-        summary = wikipedia.summary(company_name, sentences=2)
-        return {"industry": "Check summary", "sector": "General", "region": "Global", "summary": summary}
-    except:
-        return {}
+# === Streamlit App ===
+st.set_page_config(page_title="CRQM - Company Enrichment", layout="centered")
+st.title("🔐 CRQM - Company Profile Input")
 
-# ----------------- Full Fallback Chain -----------------
-def fetch_company_metadata(company_name):
-    # 1. Try Gemini
-    gemini_data = gemini_enrich_company(company_name)
-    if gemini_data:
-        return gemini_data
+company_input = st.text_input("Enter Company Name", value="Aditya Birla")
 
-    # 2. Try CompaniesMarketCap
-    marketcap_data = get_data_from_companiesmarketcap(company_name)
-    if any(marketcap_data.values()):
-        return marketcap_data
+if st.button("🔍 Fetch Company Info"):
+    with st.spinner("Fetching ticker using Gemini..."):
+        ticker, resolved_name, subsidiaries = get_valid_ticker_from_gemini(company_input)
 
-    # 3. TODO: Crunchbase, Clearbit, MoneyControl, Screener
-    # [Placeholders here for later]
+    if subsidiaries:
+        choice = st.selectbox("🧭 Select a listed subsidiary", [f"{t} - {n}" for t, n in subsidiaries])
+        ticker = choice.split(" - ")[0]
+        resolved_name = choice.split(" - ")[1]
 
-    # 4. Wikipedia Fallback
-    return get_data_from_wikipedia(company_name)
+    if ticker:
+        st.success(f"✅ Ticker Resolved: `{ticker}`  \n📌 Company: **{resolved_name}**")
 
-# ----------------- Streamlit UI -----------------
-company_input = st.text_input("Enter Company Name", value="American Express")
-st.write(f"🔍 Interpreted as: **{company_input.title()}**")
+        company_data = fetch_company_info(ticker)
+        if "Error" in company_data:
+            st.error(company_data["Error"])
+            st.stop()
 
-metadata = fetch_company_metadata(company_input)
+        # Manual overrides
+        st.markdown("### 📊 Auto-Fetched (Editable) Company Info")
+        st.text(f"Industry: {company_data.get('Industry')}")
+        st.text(f"Sector: {company_data.get('Sector')}")
+        st.text(f"Region: {company_data.get('Region')}")
 
-# Format revenue
-def parse_revenue(rev_text):
-    try:
-        if "billion" in rev_text.lower():
-            return float(rev_text.replace("$", "").split()[0])
-        elif "million" in rev_text.lower():
-            return float(rev_text.replace("$", "").split()[0]) / 1000
-    except:
-        return 1.0
-revenue_val = parse_revenue(metadata.get("revenue", "1.0")) if "revenue" in metadata else 1.0
+        employees = st.number_input(
+            "👥 Estimated Number of Employees",
+            min_value=0,
+            value=company_data.get("Employees") or 1000
+        )
 
-# UI Display
-st.markdown("### 📊 Company Profile")
-st.write(f"🏭 **Industry:** {metadata.get('industry', 'Unknown')}")
-st.write(f"📌 **Sector:** {metadata.get('sector', 'Unknown')}")
-st.write(f"🌍 **Region:** {metadata.get('region', 'Unknown')}")
+        revenue = st.number_input(
+            "💰 Estimated Revenue (in Billions USD)",
+            min_value=0.0,
+            value=(company_data.get("Revenue") or 1e9) / 1e9,
+            step=0.1
+        )
 
-employees = st.number_input("Estimated Number of Employees", min_value=1, value=int(metadata.get("employees", 10000)))
-revenue = st.number_input("Estimated Revenue (in billions USD)", min_value=0.1, value=revenue_val)
+        st.success("🎯 Company enrichment complete. Ready for CRQM modeling.")
 
-st.success("✅ Company info auto-fetched (with fallback chain) and ready for CRQM modeling.")
+        # Store output or display
+        st.markdown("#### 📄 Finalized Inputs")
+        st.write(f"**Ticker:** {ticker}")
+        st.write(f"**Name:** {company_data.get('Name')}")
+        st.write(f"**Employees:** {employees}")
+        st.write(f"**Revenue:** ${revenue:.2f} Billion")
+        st.write(f"**Industry:** {company_data.get('Industry')}")
+        st.write(f"**Sector:** {company_data.get('Sector')}")
+        st.write(f"**Region:** {company_data.get('Region')}")
+    else:
+        st.error("❌ Could not resolve a valid ticker.")
