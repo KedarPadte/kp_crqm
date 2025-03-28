@@ -1,67 +1,85 @@
 import streamlit as st
 
-st.set_page_config(page_title="CRQM Asset Classification", layout="wide")
-st.title("🔐 CRQM – Sensitivity-Based Asset Classification")
+# ---------- Page Setup ----------
+st.set_page_config(page_title="CRQM Input Wizard", layout="wide")
+st.title("🔐 CRQM – Company Risk Profiling")
 
-# --- STEP 1: Number of Classification Levels ---
-st.header("📊 Set Classification Levels")
-num_levels = st.selectbox("Select number of data sensitivity levels", [3, 4, 5, 6, 7], index=2)
-classification_labels = [f"Level {i+1}" for i in range(num_levels)]
+# ---------- 1. Company Info ----------
+with st.expander("🏢 Company Info", expanded=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        company_name = st.text_input("Company Name", value="American Express")
+        region = st.selectbox("Region", ["India", "US", "Europe", "Middle East", "APAC"])
+    with col2:
+        revenue = st.number_input("Revenue (in Billion USD)", min_value=0.0, step=0.1, value=20.0)
+        employees = st.number_input("Employees", min_value=1, value=50000)
 
-# --- STEP 2: Raw Asset Inputs ---
-st.header("📦 Asset Inventory")
+    industry = st.text_input("Industry", value="Finance")
+    sector = st.text_input("Sector", value="Banking")
+
+company_info = {
+    "Name": company_name,
+    "Region": region,
+    "Revenue (Billion USD)": revenue,
+    "Employees": employees,
+    "Industry": industry,
+    "Sector": sector
+}
+
+# ---------- 2. Sensitivity Level Setup ----------
+st.markdown("### 🧩 Sensitivity Classification Setup")
+sensitivity_levels = st.slider("Number of Sensitivity Levels", min_value=3, max_value=7, value=5)
+level_labels = [f"Level {i}" for i in range(1, sensitivity_levels + 1)]
+
+# ---------- 3. Asset Inputs ----------
+st.markdown("### 📦 Data Asset Counts")
 col1, col2, col3 = st.columns(3)
 with col1:
-    pii = st.number_input("📁 PII Records (millions)", min_value=0.0, step=0.1, value=1.0)
-    phi = st.number_input("📁 PHI Records (millions)", min_value=0.0, step=0.1, value=0.0)
-    pci = st.number_input("📁 PCI Records (millions)", min_value=0.0, step=0.1, value=0.0)
+    pii_total = st.number_input("PII Records", min_value=0, value=1_000_000)
 with col2:
-    ip_assets = st.number_input("💡 IP Assets (count)", min_value=0, step=1, value=100)
+    ip_total = st.number_input("IP Assets", min_value=0, value=500)
 with col3:
-    ot_assets = st.number_input("⚙️ OT Systems (count)", min_value=0, step=1, value=20)
+    ot_total = st.number_input("OT Assets", min_value=0, value=100)
 
-# --- STEP 3: Classification Distribution ---
-st.header("📌 Sensitivity Classification (%)")
+# ---------- Helper to Get Distribution ----------
+def get_distribution(asset_type, total):
+    st.markdown(f"**{asset_type} Classification Distribution (%):**")
+    cols = st.columns(len(level_labels))
+    percentages = []
+    for i, col in enumerate(cols):
+        with col:
+            pct = st.number_input(f"{level_labels[i]}", min_value=0, max_value=100, step=5, key=f"{asset_type}_{i}")
+            percentages.append(pct)
+    if sum(percentages) != 100:
+        st.warning(f"⚠️ {asset_type}: Percentages should sum to 100%.")
+    counts = [round((pct / 100) * total) for pct in percentages]
+    return dict(zip(level_labels, counts))
 
-def get_classification_distribution(asset_name):
-    st.subheader(f"🔐 {asset_name} Classification Distribution")
-    distribution = {}
-    total = 0
-    for level in classification_labels:
-        val = st.number_input(f"{asset_name} → {level}", min_value=0, max_value=100, step=5, value=0,
-                              key=f"{asset_name}_{level}")
-        distribution[level] = val
-        total += val
-    if total != 100:
-        st.warning(f"⚠️ {asset_name} classification must sum to 100% (currently {total}%)")
-    return distribution
+# ---------- 4. Classification Distribution ----------
+st.markdown("### 🧮 Classification Breakdown")
 
-pii_dist = get_classification_distribution("PII")
-ip_dist = get_classification_distribution("IP")
-ot_dist = get_classification_distribution("OT")
+with st.expander("🔒 PII Classification"):
+    pii_dist = get_distribution("PII", pii_total)
+with st.expander("💡 IP Classification"):
+    ip_dist = get_distribution("IP", ip_total)
+with st.expander("⚙️ OT Classification"):
+    ot_dist = get_distribution("OT", ot_total)
 
-# --- STEP 4: Auto-calculate actual assets per level ---
-def calc_distribution(base_count, distribution_dict, scale=1):
-    return {level: round((pct / 100) * base_count * scale, 2) for level, pct in distribution_dict.items()}
-
-if st.button("✅ Generate Sensitivity Distribution Report"):
-    st.success("🔍 Distribution Generated Based on Inputs")
-
-    st.subheader("📋 Asset Count per Classification Level")
-    
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown("**🔐 PII Records**")
-        pii_counts = calc_distribution(pii, pii_dist, scale=1_000_000)
-        st.json(pii_counts)
-
-    with col2:
-        st.markdown("**💡 IP Assets**")
-        ip_counts = calc_distribution(ip_assets, ip_dist)
-        st.json(ip_counts)
-
-    with col3:
-        st.markdown("**⚙️ OT Systems**")
-        ot_counts = calc_distribution(ot_assets, ot_dist)
-        st.json(ot_counts)
+# ---------- 5. Final Summary ----------
+if st.button("✅ Generate CRQM Profile"):
+    summary = {
+        "Company Info": company_info,
+        "Sensitivity Levels": level_labels,
+        "Asset Counts": {
+            "PII": pii_total,
+            "IP": ip_total,
+            "OT": ot_total
+        },
+        "Classified Assets": {
+            "PII": pii_dist,
+            "IP": ip_dist,
+            "OT": ot_dist
+        }
+    }
+    st.success("CRQM Profile Generated Successfully!")
+    st.json(summary)
