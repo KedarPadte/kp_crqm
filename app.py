@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 
@@ -41,7 +40,7 @@ def get_company_profile(domain):
         return None, None
 
 # ---------- INPUTS ----------
-raw_input = st.text_input("Enter Company Name", value="American Express")
+raw_input = st.text_input("🔍 Enter Company Name", value="American Express")
 normalized_name, domain = normalize_company_name(raw_input)
 
 st.write(f"🔍 Interpreted as: **{normalized_name}**")
@@ -81,16 +80,26 @@ if "Healthcare" in domains_selected:
 
 # ---------- CLASSIFICATION ----------
 st.markdown("### 🗂️ Data Classification")
-classification_labels = [f"Level {i}" for i in range(1, 6)]
-classification_distribution = {}
-total_percent = 0
-for level in classification_labels:
-    val = st.number_input(f"% of data at {level}", min_value=0, max_value=100, value=0, step=5)
-    classification_distribution[level] = val
-    total_percent += val
 
-if total_percent != 100:
-    st.warning("⚠️ Total classification percentage should sum to 100%.")
+num_levels = st.selectbox("Select number of sensitivity levels", options=[3, 4, 5, 6, 7], index=2)
+classification_labels = [f"Level {i}" for i in range(1, num_levels + 1)]
+
+st.markdown("#### 🔐 Classification Distribution per Data Type")
+classification_data = {}
+
+for dtype in ["PII", "IP", "OT"]:
+    st.subheader(f"{dtype} Classification")
+    total = 0
+    level_distribution = {}
+    cols = st.columns(num_levels)
+    for i, label in enumerate(classification_labels):
+        with cols[i]:
+            val = st.number_input(f"{label} (%)", min_value=0, max_value=100, step=5, key=f"{dtype}_{label}")
+            level_distribution[label] = val
+            total += val
+    if total != 100:
+        st.warning(f"⚠️ {dtype} classification must sum to 100%. Current: {total}%")
+    classification_data[dtype] = level_distribution
 
 # ---------- PRIVACY DATA ----------
 st.markdown("### 🔒 Privacy Data")
@@ -125,7 +134,7 @@ if st.button("✅ Confirm Inputs"):
         "Region": region,
         "Employees": employees,
         "Revenue (Billion USD)": revenue,
-        "Classification %": classification_distribution,
+        "Classification % by Type": classification_data,
         "Privacy Data": {"PII": pii, "PHI": phi, "PCI": pci},
         "IP Assets": ip_assets,
         "Compliances": compliances
